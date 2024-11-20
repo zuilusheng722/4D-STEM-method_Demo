@@ -1497,154 +1497,6 @@ def cut(z):
     # Return the array z without the first and last rows and columns
     return z[1:nl-1, 1:nc-1]
     
-
-def radial_gradient_maximum_optimized1(sample, blob, radius, num_rings=60, ring_range=1, num_points=100, threshold=1, step_size=0.1):
-    """
-    Find the point with the maximum radial gradient in a given sample around a blob.
-
-    Parameters:
-    - sample: 2D numpy array representing the image or data.
-    - blob: Tuple (x, y) indicating the initial position of the blob.
-    - radius: Initial search radius around the blob.
-    - num_rings: Number of concentric rings to evaluate.
-    - ring_range: Range of search around the blob in pixels.
-    - num_points: Number of points per ring.
-    - threshold: Threshold value (not used in this version).
-    - step_size: Minimum step size for the search. The default step size is 0.1, and you can choose a lower step size, such as 0.00001 
-
-    Returns:
-    - adjusted_center: Array [x, y] indicating the optimized position.
-    """
-    
-    h, w = sample.shape
-    adj_radius = radius * 1
-    ring_radius = np.linspace(adj_radius * 0.8, adj_radius * 1.2, num_rings)
-    theta = np.linspace(0, 2 * np.pi, num_points)
-    sin_theta = np.sin(theta)
-    cos_theta = np.cos(theta)
-
-    def search_around_blob(blob, search_range, step):
-        """
-        Search for the maximum gradient around the blob within a specified range and step size.
-
-        Returns:
-        - ind_list: List of [x, y, gradient_difference] for each point evaluated.
-        """
-        ca_range = np.arange(-search_range, search_range + step, step)
-        cb_range = np.arange(-search_range, search_range + step, step)
-        ind_list = []
-
-        for ca in ca_range:
-            for cb in cb_range:
-                # Calculate current coordinates
-                cur_row, cur_col = blob[1] + ca, blob[0] + cb
-                # Compute row and column coordinates for each ring
-                row_coor = np.clip((cur_row + ring_radius[:, None] * sin_theta + 0.5).astype(int), 0, h - 1)
-                col_coor = np.clip((cur_col + ring_radius[:, None] * cos_theta + 0.5).astype(int), 0, w - 1)
-                
-                # Sum intensities along the rings
-                int_sum = np.sum(sample[row_coor, col_coor], axis=1)
-                # Calculate weighted sum for first half of rings
-                weighted_sum = np.sum(int_sum[:num_rings // 2] * np.linspace(1, num_rings // 2, num_rings // 2))
-                # Compute the difference between weighted and second half sums
-                cacb_diff = weighted_sum - np.sum(int_sum[num_rings // 2:])
-                
-                ind_list.append([cur_col, cur_row, cacb_diff])
-
-        return np.array(ind_list)
-
-    def multi_level_search(blob, initial_step):
-        """
-        Perform a multi-level search to refine the blob position for maximum gradient.
-
-        Returns:
-        - best_point: The position with the maximum gradient difference.
-        """
-        best_point = blob
-        search_range = ring_range
-        step = initial_step
-        
-        # Coarse initial search
-        ind_list = search_around_blob(best_point, search_range, step)
-        ind_max = np.argmax(ind_list[:, 2])
-        best_point = ind_list[ind_max, :2]
-
-        # Refine search with smaller steps
-        while step > step_size:
-            search_range = step
-            step /= 10
-            ind_list = search_around_blob(best_point, search_range, step)
-            ind_max = np.argmax(ind_list[:, 2])
-            best_point = ind_list[ind_max, :2]
-
-        return np.append(best_point, ind_list[ind_max, 2])
-
-    # Execute the multi-level search
-    best_point = multi_level_search(blob, 0.1)
-    adjusted_center = best_point
-
-    return adjusted_center
-
-def Jxtd1(data,flag=False, blob=None, radius=None,num_rings=60, ring_range=1, num_points=100, threshold=1,step_size=0.1):
-
-    """  
-    Performs a series of image processing steps to detect and refine the center and radius of a circular object in an image.  
-  
-    Parameters:  
-    - data: The input image data, expected to be a 2D array (e.g., grayscale image).  
-    - flag (bool, optional): If True, forces the image to be filtered before further processing. Defaults to False.  
-    - blob (list, optional): Initial blob center coordinates (x, y). If None, it will be automatically detected.  
-    - radius (float, optional): Initial radius estimate. If None, it will be estimated based on blob detection.  
-    - num_rings (int, optional): Number of rings used for radial gradient analysis. Higher values provide finer gradient analysis.  
-    - ring_range (int, optional): Range of pixels to sample around each ring for gradient calculation. Larger values may increase noise sensitivity.  
-    - num_points (int, optional): Number of points sampled per ring for gradient analysis. More points improve accuracy but increase computation.  
-    - threshold (float, optional): Threshold for detecting local maxima in the radial gradient. Higher values make detection stricter. 
-    - step_size (float, optional): Minimum step size for the search. The default step size is 0.1, and you can choose a lower step size, such as 0.00001   
-  
-    Function Steps and Impacts:  
-    1. If blob or radius are not provided, automatically detect the blob center and radius using gradient and least squares circle fitting.  
-    2. Optionally, if flag is True, apply filtering to the input image to enhance or preprocess it for better analysis.  
-    3. Perform radial gradient maximum analysis on the image, using the provided or detected blob and radius as starting points.  
-       - This step refines the blob center location by searching for local maxima in the radial gradient.  
-    4. Return the refined blob center coordinates (y, x) and the estimated radius. 
-  
-    Returns:  
-    - tuple: A tuple containing the refined y-coordinate of the blob center, the refined x-coordinate of the blob center, and the estimated radius.  
-  
-    Note: The return order of coordinates is (y, x) which is a common convention in image processing, where the origin (0,0) is at the top-left corner.  
-    """  
-    #If blob or radius are not provided, automatically detect them  
-    if blob is None or radius is None:
-        # Filtering
-        binary = filtering(data)
-        # Calculate gradient magnitude and angle
-        gradient_img, angle = getAngle(binary)
-        # Get x coordinates of edge points
-        x_center = getX(gradient_img)
-        a = np.array(x_center)
-        if len(a) == 0:
-            return 0,0,0
-        else:
-            # Fit a circle to the edge points
-            #yc, xc, radius, residual = least_squares_circle(a)
-            yc, xc, radius = find_circle_in_image(binary)
-            blob=[[xc,yc]]
-            radius=radius
-            if blob is None or radius is None:
-                return 0, 0, 0
-    if flag == True:
-        # Filtering
-        data = filtering(data)
-    # Find the adjusted center using radial gradient maximum
-    ref_ctr = radial_gradient_maximum_optimized(data, blob, radius, num_rings=num_rings, ring_range=ring_range, num_points=num_points, threshold=threshold,step_size=step_size)
-
-    return ref_ctr[0], ref_ctr[1], radius
- 
-
-
-
-
-
 def plot_jxtd(sample, blob, radius, num_rings=10, ring_range=2, num_points=100, threshold=1, step_size=0.1):
 
     h, w = sample.shape
@@ -1984,3 +1836,69 @@ def plot_Corre(data1, data2, flag=False, step=5):
     plt.show()
 
     return y_peak, x_peak
+    
+def get_Angle(img):
+    """ Calculate Sobel gradient map and edge angle """
+    # Use cv2.Sobel optimization
+    img_x = cv2.Sobel(img, cv2.CV_64F, 1, 0, ksize=3)
+    img_y = cv2.Sobel(img, cv2.CV_64F, 0, 1, ksize=3)
+    grad_magnitude, angle = cv2.cartToPolar(img_x, img_y)
+    return grad_magnitude, angle
+
+
+def getEdgePoints(img):
+    """ Get the coordinates of the edge points """
+    pxh, pxw = img.shape
+    edge_points = []
+    for i in range(pxh):
+        for j in range(pxw):
+            if img[i, j] != 0:
+                edge_points.append([i, j])
+    return np.array(edge_points)
+
+
+def circle_residual(c, x, y):
+    """ Calculate the residuals of the fitted circle """
+    Ri = np.sqrt((x - c[0]) ** 2 + (y - c[1]) ** 2)
+    return np.sum((Ri - Ri.mean()) ** 2)
+
+
+def fit_circles(coords):
+    """ Fit a circle using the least squares method """
+    x = coords[:, 0]
+    y = coords[:, 1]
+
+    # Preliminary estimate of the center position
+    center_estimate = np.mean(coords, axis=0)
+
+    # Least squares optimization using the trust-constr method
+    result = minimize(circle_residual, center_estimate, args=(x, y), method='trust-constr')
+    xc, yc = result.x
+
+    # Calculate the fitting radius
+    Ri = np.sqrt((x - xc) ** 2 + (y - yc) ** 2)
+    R = Ri.mean()
+
+    return xc, yc, R
+
+
+# Edge Detection
+def edge_detection_fitting_circles(image,flag=False):
+    if flag==True:
+        # Median filter and Gaussian filter preprocessing
+        image = cv2.medianBlur(image, 5)
+        image = cv2.GaussianBlur(image, (5, 5), 0)
+    _, binary = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # Get edge graph
+    grad_magnitude, _ = get_Angle(binary)
+
+    # Get valid edge points
+    edge_points = getEdgePoints(grad_magnitude)
+    if len(edge_points) < 5:  # Too few edge points to fit a circle
+        return 0, 0, 0
+
+    # Fitting circle
+    yc, xc, R = fit_circles(edge_points)
+
+    return xc, yc, R
