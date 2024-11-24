@@ -809,6 +809,72 @@ def generate_ring_kernel(radius, ring_size):
     # Return the generated convolution kernel
     return kernel
 
+def get_Angle(img):
+    """ Calculate Sobel gradient map and edge angle """
+    # Use cv2.Sobel optimization
+    img_x = cv2.Sobel(img, cv2.CV_64F, 1, 0, ksize=3)
+    img_y = cv2.Sobel(img, cv2.CV_64F, 0, 1, ksize=3)
+    grad_magnitude, angle = cv2.cartToPolar(img_x, img_y)
+    return grad_magnitude, angle
+
+
+def getEdgePoints(img):
+    """ Get the coordinates of the edge points """
+    pxh, pxw = img.shape
+    edge_points = []
+    for i in range(pxh):
+        for j in range(pxw):
+            if img[i, j] != 0:
+                edge_points.append([i, j])
+    return np.array(edge_points)
+
+
+def circle_residual(c, x, y):
+    """ Calculate the residuals of the fitted circle """
+    Ri = np.sqrt((x - c[0]) ** 2 + (y - c[1]) ** 2)
+    return np.sum((Ri - Ri.mean()) ** 2)
+
+
+def fit_circles(coords):
+    """ Fit a circle using the least squares method """
+    x = coords[:, 0]
+    y = coords[:, 1]
+
+    # Preliminary estimate of the center position
+    center_estimate = np.mean(coords, axis=0)
+
+    # Least squares optimization using the trust-constr method
+    result = minimize(circle_residual, center_estimate, args=(x, y), method='trust-constr')
+    xc, yc = result.x
+
+    # Calculate the fitting radius
+    Ri = np.sqrt((x - xc) ** 2 + (y - yc) ** 2)
+    R = Ri.mean()
+
+    return xc, yc, R
+
+
+# Edge Detection
+def edge_detection_fitting_circles(image,flag=False):
+    if flag==True:
+        # Median filter and Gaussian filter preprocessing
+        image = cv2.medianBlur(image, 5)
+        image = cv2.GaussianBlur(image, (5, 5), 0)
+    _, binary = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # Get edge graph
+    grad_magnitude, _ = get_Angle(binary)
+
+    # Get valid edge points
+    edge_points = getEdgePoints(grad_magnitude)
+    if len(edge_points) < 5:  # Too few edge points to fit a circle
+        return 0, 0, 0
+
+    # Fitting circle
+    yc, xc, R = fit_circles(edge_points)
+
+    return xc, yc, R
+
 def getCorre(data1, data2, step=5, flag=False):
     """
     Calculate cross-correlation.
@@ -1107,6 +1173,7 @@ def remove_low_frequency_noise(x, y, threshold_factor=0.1, enhancement_factor=0.
     return x_filtered, y_filtered
 
 def radial_gradient_maximum_optimized(img, blob, radius, num_rings=60, ring_range=2, num_points=100, threshold=1):
+
     """
     Find the maximum radial gradient points around a specified center in the image.
 
@@ -1181,7 +1248,90 @@ def radial_gradient_maximum_optimized(img, blob, radius, num_rings=60, ring_rang
                 adjusted_center = ind_list[np.argmax(ind_list[:, 2])]
 
     return adjusted_center[:2]
+    
+  
+def radial_gradient_maximum_optimized1(sample, blob, radius, num_rings=60, ring_range=2, num_points=80, threshold=1,
+                                      step_size=0.00001):
+    h, w = sample.shape
+    adj_radius = radius * 1
+    ring_radius = np.linspace(adj_radius * 0.8, adj_radius * 1.2, num_rings)
+    theta = np.linspace(0, 2 * np.pi, num_points)
+    sin_theta = np.sin(theta)
+    cos_theta = np.cos(theta)
 
+    def search_around_blob(blob, search_range, step):
+        ca_range = np.arange(-search_range, search_range + step, step)
+        cb_range = np.arange(-search_range, search_range + step, step)
+        ind_list = []
+
+        for ca in ca_range:
+            for cb in cb_range:
+                cur_row, cur_col = blob[1] + ca, blob[0] + cb
+                row_coor = np.clip((cur_row + ring_radius[:, None] * sin_theta + 0.5).astype(int), 0, h - 1)
+                col_coor = np.clip((cur_col + ring_radius[:, None] * cos_theta + 0.5).astype(int), 0, w - 1)
+
+                int_sum = np.sum(sample[row_coor, col_coor], axis=1)
+                weighted_sum = np.sum(int_sum[:num_rings // 2] * np.linspace(1, num_rings // 2, num_rings // 2))
+                cacb_diff = weighted_sum - np.sum(int_sum[num_rings // 2:])
+
+                ind_list.append([cur_col, cur_row, cacb_diff])
+
+        return np.array(ind_list)
+
+    def multi_level_search(blob, initial_step):
+        best_point = blob
+        search_range = ring_range
+        step = initial_step
+
+        ind_list = search_around_blob(best_point, search_range, step)
+        ind_max = np.argmax(ind_list[:, 2])
+        best_point = ind_list[ind_max, :2]
+
+        while step > step_size:
+            search_range = step
+            step /= 10
+            ind_list = search_around_blob(best_point, search_range, step)
+            ind_max = np.argmax(ind_list[:, 2])
+            best_point = ind_list[ind_max, :2]
+
+        return np.append(best_point, ind_list[ind_max, 2])
+
+    best_point = multi_level_search(blob, 0.1)
+    adjusted_center = best_point
+
+    return adjusted_center
+
+def Jxtd1(data, flag=False, blobs=None, radius=None, num_rings=40, ring_range=2, num_points=100, threshold=1,step_size=0.00001):
+
+    if blobs is None or radius is None:
+        binary = filtering(data)
+        grandien_img, angle = getAngle(binary)
+        x_center = getX(grandien_img)
+        a = np.array(x_center)
+        if len(a) == 0:
+            return 0, 0, 0
+        else:
+            #yc, xc, radius = least_squares_circle(a)
+
+            # ret, binary1 = cv2.threshold(data, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            #yc, xc, radius = find_circle_in_image(binary)
+            data = (((data - data.min()) / (data.max() - data.min())) * 255).astype(np.uint8)
+            xc, yc, radius = edge_detection_fitting_circles(data,flag=True)
+            
+            blobs = [xc, yc]
+            #print(blobs)
+            if blobs is None or radius is None:
+                return 0, 0, 0
+    if flag:
+        # Filtering
+        data = filtering(data)
+    #print(radius)
+    #data = np.log1p(data / data.max() * 10000)
+    ref_ctr = radial_gradient_maximum_optimized1(data, blobs, radius, num_rings=num_rings, ring_range=ring_range, num_points=num_points, threshold=threshold,step_size=step_size)
+    ref_blobs_list = ref_ctr
+
+    return ref_blobs_list[0], ref_blobs_list[1], radius
+ 
 def Jxtd(data,flag=False, blob=None, radius=None,num_rings=40, ring_range=2, num_points=100, threshold=2):
 
     """  
@@ -1221,9 +1371,12 @@ def Jxtd(data,flag=False, blob=None, radius=None,num_rings=40, ring_range=2, num
         if len(a) == 0:
             return 0,0,0
         else:
+                  
             # Fit a circle to the edge points
             #yc, xc, radius, residual = least_squares_circle(a)
-            yc, xc, radius = find_circle_in_image(binary)
+            #yc, xc, radius = find_circle_in_image(binary)
+            data = (((data - data.min()) / (data.max() - data.min())) * 255).astype(np.uint8)
+            xc, yc, radius = edge_detection_fitting_circles(data,flag=True)
             blob=[xc,yc]
             radius=radius
             if blob is None or radius is None:
@@ -1837,68 +1990,3 @@ def plot_Corre(data1, data2, flag=False, step=5):
 
     return y_peak, x_peak
     
-def get_Angle(img):
-    """ Calculate Sobel gradient map and edge angle """
-    # Use cv2.Sobel optimization
-    img_x = cv2.Sobel(img, cv2.CV_64F, 1, 0, ksize=3)
-    img_y = cv2.Sobel(img, cv2.CV_64F, 0, 1, ksize=3)
-    grad_magnitude, angle = cv2.cartToPolar(img_x, img_y)
-    return grad_magnitude, angle
-
-
-def getEdgePoints(img):
-    """ Get the coordinates of the edge points """
-    pxh, pxw = img.shape
-    edge_points = []
-    for i in range(pxh):
-        for j in range(pxw):
-            if img[i, j] != 0:
-                edge_points.append([i, j])
-    return np.array(edge_points)
-
-
-def circle_residual(c, x, y):
-    """ Calculate the residuals of the fitted circle """
-    Ri = np.sqrt((x - c[0]) ** 2 + (y - c[1]) ** 2)
-    return np.sum((Ri - Ri.mean()) ** 2)
-
-
-def fit_circles(coords):
-    """ Fit a circle using the least squares method """
-    x = coords[:, 0]
-    y = coords[:, 1]
-
-    # Preliminary estimate of the center position
-    center_estimate = np.mean(coords, axis=0)
-
-    # Least squares optimization using the trust-constr method
-    result = minimize(circle_residual, center_estimate, args=(x, y), method='trust-constr')
-    xc, yc = result.x
-
-    # Calculate the fitting radius
-    Ri = np.sqrt((x - xc) ** 2 + (y - yc) ** 2)
-    R = Ri.mean()
-
-    return xc, yc, R
-
-
-# Edge Detection
-def edge_detection_fitting_circles(image,flag=False):
-    if flag==True:
-        # Median filter and Gaussian filter preprocessing
-        image = cv2.medianBlur(image, 5)
-        image = cv2.GaussianBlur(image, (5, 5), 0)
-    _, binary = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-    # Get edge graph
-    grad_magnitude, _ = get_Angle(binary)
-
-    # Get valid edge points
-    edge_points = getEdgePoints(grad_magnitude)
-    if len(edge_points) < 5:  # Too few edge points to fit a circle
-        return 0, 0, 0
-
-    # Fitting circle
-    yc, xc, R = fit_circles(edge_points)
-
-    return xc, yc, R
